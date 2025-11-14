@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>
+      {% block title %}Campus Carbon Footprint Analyzer{% endblock %}
+    </title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    {% block extra_css %}{% endblock %}
+  </head>
+  <body>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <button class="sidebar-toggle" id="sidebarToggle">
+        <i class="fas fa-bars"></i>
+      </button>
+
+      <div class="sidebar-brand">
+        <i class="fas fa-leaf fa-2x"></i>
+        <span class="brand-text">Carbon Footprint</span>
+      </div>
+
+      <nav class="nav-menu">
+        <a href="{{ url_for('index') }}" class="nav-link">
+          <i class="fas fa-chart-line"></i>
+          <span class="nav-text">Dashboard</span>
+        </a>
+        {% if session.get('user_id') %}
+        <a href="{{ url_for('data_input') }}" class="nav-link">
+          <i class="fas fa-edit"></i>
+          <span class="nav-text">Data Input</span>
+        </a>
+        <a href="{{ url_for('logout') }}" class="nav-link">
+          <i class="fas fa-sign-out-alt"></i>
+          <span class="nav-text">Logout ({{ session.get('username') }})</span>
+        </a>
+        {% else %}
+        <a href="{{ url_for('login') }}" class="nav-link">
+          <i class="fas fa-user"></i>
+          <span class="nav-text">Admin Login</span>
+        </a>
+        {% endif %}
+      </nav>
+    </aside>
+
+    <div class="main-content">
+      {% block content %}{% endblock %}
+
+      <footer class="footer">
+        <p>&copy; 2025 KIT - Supporting UN SDG 13: Climate Action</p>
+      </footer>
+    </div>
+
+    <script>
+      // Sidebar toggle functionality
+      document.addEventListener("DOMContentLoaded", function () {
+        const sidebar = document.querySelector(".sidebar");
+        const mainContent = document.querySelector(".main-content");
+        const toggleBtn = document.getElementById("sidebarToggle");
+
+        // Check localStorage for saved state
+        const sidebarCollapsed =
+          localStorage.getItem("sidebarCollapsed") === "true";
+        if (sidebarCollapsed) {
+          sidebar.classList.add("collapsed");
+          mainContent.classList.add("sidebar-collapsed");
+        }
+
+        toggleBtn.addEventListener("click", function () {
+          sidebar.classList.toggle("collapsed");
+          mainContent.classList.toggle("sidebar-collapsed");
+
+          // Save state to localStorage
+          localStorage.setItem(
+            "sidebarCollapsed",
+            sidebar.classList.contains("collapsed")
+          );
+
+          // Trigger layout and chart recalculation after the CSS transition
+          setTimeout(function () {
+            window.dispatchEvent(new Event("resize"));
+          }, 320);
+        });
+      });
+    </script>
+
+    {% block extra_js %}{% endblock %}
+  </body>
+</html>

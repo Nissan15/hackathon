@@ -1,0 +1,5 @@
+date,source_type,raw_value,unit
+2025-06-15,electricity,130000,kWh
+2025-06-15,bus_diesel,5500,Liters
+2025-06-15,canteen_lpg,850,kg
+2025-06-15,waste_landfill,2300,kg

@@ -1,0 +1,183 @@
+Project: Campus Carbon Footprint Analyzer
+Repository path: (workspace root)
+
+Purpose
+-------
+This project is a Campus Carbon Footprint Analyzer: a Flask web application for collecting, storing, converting and visualizing activity data from a campus (electricity use, transport fuel use, canteen fuel, waste) and using emission factors to compute CO2-equivalent emissions. It provides a public dashboard with KPIs, monthly trends and source breakdowns, plus a protected admin portal for entering new activity records. The system supports both session-based web logins and JWT-based API access for automated data ingestion.
+
+What this project tracks
+------------------------
+- Electricity consumption (unit: kWh)
+- Transport fuel use (example: bus_diesel in Liters)
+- Canteen fuel (LPG) or cooking fuel (unit: kg)
+- Waste sent to landfill (unit: kg)
+
+From these raw inputs the project computes emissions (tonnes CO2e) using emission factors stored in the database. Calculation used across the app:
+
+    emissions_tonnes = (raw_value * factor) / 1000
+
+(where factors are stored in kg CO2e per unit)
+
+How to run the project (local development)
+------------------------------------------
+Requirements and environment
+- Python 3.11+
+- MySQL server (the project is configured for MySQL; the included `database/init_db.py` expects a MySQL server connection). The `pyproject.toml` lists `mysql-connector-python` as dependency.
+- Create a `.env` file in the project root or set environment variables:
+  - DB_HOST (default: localhost)
+  - DB_PORT (default: 3306)
+  - DB_USER (default: root)
+  - DB_PASSWORD (required)
+  - DB_NAME (default: campus_carbon)
+  - SESSION_SECRET (optional, used for Flask sessions and JWT signing)
+  - FLASK_DEBUG (optional, default True)
+
+Install Python dependencies (example using pip):
+
+    pip install -r requirements.txt
+
+If `requirements.txt` is not present, install directly (from `pyproject.toml`):
+
+    pip install flask flask-cors mysql-connector-python python-dotenv pyjwt
+
+Initialize the database (creates schema, default admin user and sample data):
+
+    python database/init_db.py
+
+Then start the Flask app:
+
+    python app.py
+
+Open a browser at http://localhost:5000 to view the public dashboard.
+
+Notes about running in this workspace
+- The app currently raises an error at startup if `DB_PASSWORD` is not set in environment variables to prevent accidental unsecured runs. Make sure `.env` contains DB_PASSWORD or set it in your shell before running.
+- The `init_db.py` script also reads the same environment variables. It connects to MySQL and will create tables and sample data.
+
+What happens when you run the app (high-level flow)
+--------------------------------------------------
+1. Startup
+   - Flask app loads configuration and requires `DB_PASSWORD` environment variable.
+   - A MySQL connection pool is attempted. If pool creation fails, the app falls back to fresh connections for each request.
+
+2. Public dashboard (`GET /` and `GET /api/dashboard`)
+   - `GET /` renders `templates/dashboard.html` which loads front-end JS (`static/js/dashboard.js`) that calls `GET /api/dashboard`.
+   - `/api/dashboard` queries `activity_data` joined with `emission_factors` for the requested date range (defaults to last ~180 days).
+   - For each activity record the server computes emissions in tonnes using the factor. Server aggregates:
+     - total emissions
+     - per-source emissions (breakdown)
+     - monthly totals for trend chart
+     - energy saved (a simple sum of electricity raw_value)
+     - percent change compared to prior period
+   - The endpoint returns JSON that the front-end uses to populate charts and KPI cards.
+
+3. Admin login and data input
+   - Admin login form posts to `/login` (session-based). On success, session keys `user_id` and `username` are set.
+   - `/data-input` page (protected by `login_required`) renders a form allowing manual entry of `date`, `source_type`, `raw_value`, `unit`.
+   - Front-end likely validates the form and POSTs to `/api/data` with JSON; the route is protected by `api_token_required` which accepts either an active session or a Bearer JWT.
+   - `/api/data` inserts a new record into `activity_data` with the provided fields.
+
+4. API token login
+   - `POST /api/login` accepts username/password JSON, validates them against `users` table and returns a JWT (24 hour expiry) signed with `SESSION_SECRET` (or `app.secret_key`). This JWT can be used for programmatic ingestion to `/api/data` by providing `Authorization: Bearer <token>` header.
+
+Database schema and important tables
+-----------------------------------
+- `users` (id, username, password_hash)
+- `activity_data` (id, date, source_type, raw_value, unit)
+- `emission_factors` (id, source_type, factor, factor_unit)
+
+Data input and conversion details
+---------------------------------
+Input fields (from UI / API)
+- date: expected as YYYY-MM-DD
+- source_type: a string key matching `emission_factors.source_type` (e.g., 'electricity', 'bus_diesel', 'canteen_lpg', 'waste_landfill')
+- raw_value: numeric value representing the measured consumption (float)
+- unit: textual unit (kWh, Liters, kg)
+
+Server-side handling
+- For new records, the server does not perform deep unit normalization; it stores the raw_value and unit as provided.
+- Emission calculation during dashboard/read operations relies on matching `source_type` between `activity_data` and `emission_factors` and applying:
+
+      emissions_tonnes = (raw_value * factor) / 1000
+
+  where `factor` is in kg CO2e per unit. This means the app expects compatible units (e.g., electricity in kWh with factor kg_CO2e_per_kwh).
+
+Edge cases and validations to be aware of
+- Missing or mismatched `source_type` between `activity_data` and `emission_factors` will cause JOIN issues or missing conversion; the app assumes matching source_type values exist.
+- `raw_value` coming as a string may be cast implicitly, but some DB drivers or SQL configurations may fail; better to ensure numeric input on the client side.
+- Date formats must be YYYY-MM-DD or the DB will reject the insert.
+- No explicit per-unit conversion (e.g., liters to kg) is implemented; the emission factors should match the units used when inserting data.
+
+Security, auth and tokens
+------------------------
+- Session-based login for web pages (`/login`) stores user info in Flask `session` and protects pages using `login_required` decorator.
+- `api_token_required` decorator accepts either a valid session or a valid JWT in the `Authorization` header. JWTs are signed with the app secret and have a 24 hour expiry.
+- Passwords are hashed with Werkzeug's `generate_password_hash` and checked with `check_password_hash`.
+
+Developer notes and improvements (small, low-risk extras)
+---------------------------------------------------------
+- Add input validation on `/api/data` to coerce `raw_value` to float and validate `date` format.
+- Add explicit unit normalization or a unit mapping table to prevent mismatches.
+- Add CSV bulk upload for admin to speed data entry.
+- Add better error messages and return created record id on `/api/data`.
+
+How data conversion happens (summary)
+------------------------------------
+1. Admin or API client sends `raw_value` and `unit` associated to a `source_type`.
+2. Data is stored as-is in `activity_data`.
+3. When building the dashboard, server looks up `emission_factors.factor` for that `source_type` and computes emissions in tonnes by multiplying and dividing by 1000.
+4. Aggregations (monthly totals, breakdowns) are computed in Python after fetching joined rows.
+
+APIs and routes quick reference
+------------------------------
+- GET / -> dashboard page
+- GET /login -> login page
+- POST /login -> web login
+- GET /data-input -> data input page (admin only)
+- POST /api/login -> returns JWT for API usage
+- POST /api/data -> add new activity record (requires session or JWT)
+- GET /api/dashboard -> JSON aggregated dashboard data
+- GET /api/recommendations -> actionable recommendations based on totals
+
+10-minute speech (for presentation)
+-----------------------------------
+[Speech title: "Measuring and Managing Campus Emissions — A Practical Tool"]
+
+Introduction (1 minute)
+Good morning/afternoon. Today I’ll show you a practical, lightweight system built to help colleges and campuses measure, visualize and act on their carbon footprint. Our Campus Carbon Footprint Analyzer converts everyday operational data—like electricity bills, diesel for buses, canteen fuel, and landfill waste—into a clear picture of CO2-equivalent emissions.
+
+Why this matters (1.5 minutes)
+Every institution contributes to climate change through energy use, transport, food services and waste. Yet many campuses lack the tools to track these emissions consistently. Without data, it’s impossible to set targets or measure progress. This project focuses on transparent measurement: collecting routine consumption data and converting it using internationally-understood emission factors so administrators can see where emissions come from and where reductions will have the most impact.
+
+What the tool does (2 minutes)
+The application is a Flask-based web app with two main user experiences. A public dashboard presents KPIs: total emissions, month-by-month trends, and a breakdown by source. For campus staff there’s a protected admin interface to add daily or monthly consumption records manually. For integrations, the app supports token-based API access—so smart meters or automated scripts can push data securely.
+
+Data and conversion (1.5 minutes)
+At the core are simple, auditable conversions. The app stores raw consumption values and associates each source with an emission factor (for example, kg CO2-equivalent per kWh for electricity). Emissions are calculated as (raw_value * factor)/1000 to produce tonnes CO2e. This keeps the math simple and traceable and matches common reporting units.
+
+Real value: dashboards and recommendations (1.5 minutes)
+With the data, the dashboard surfaces three useful outputs: high-level KPIs, monthly trends, and a source breakdown. Those numbers are the basis for targeted recommendations—like energy efficiency for electricity-heavy campuses or greener transport if buses dominate emissions. The app even generates prioritized recommendations so administrators know what to tackle first.
+
+How it helps decision-makers (1 minute)
+Quantified metrics enable goal-setting and verification. For instance, if a campus targets a 10% reduction in emissions from electricity over a year, the dashboard shows whether measures—like LED retrofits or solar installations—are moving the needle.
+
+Next steps and extensibility (1 minute)
+This is intentionally minimal and extensible. Next steps include bulk CSV ingestion for legacy data, unit normalization, predictive forecasting to prioritize interventions, and mobile-friendly reporting. With a small set of additional integrations, this tool can become part of an institution’s sustainability monitoring toolkit.
+
+Closing (30 seconds)
+In short, measuring is the first step toward managing emissions. With this project you can move from anecdotes to evidence and make data-driven choices for a lower-carbon campus. Thank you — I’m happy to demo the dashboard or dive into the data model if you’d like.
+
+Files changed/added
+------------------
+- `workflow.txt` — This file: purpose, run instructions, data flow details, and a 10-minute speech.
+
+Verification steps I performed
+-----------------------------
+- Read `app.py`, `database/init_db.py`, `database/schema.sql`, `README.md`, and `pyproject.toml` to infer runtime requirements and data flow.
+
+Next steps (suggested)
+----------------------
+- If you want, I can add input validation for `/api/data` and a CSV bulk upload endpoint.
+- I can also generate a `requirements.txt` and a `.env.example` to make setup smoother.
+
+Done.
